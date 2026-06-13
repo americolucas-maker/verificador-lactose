@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Verificador de Lactose - Protótipo</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f0f2f5;
+    margin: 0;
+    padding: 24px 16px;
+    display: flex;
+    justify-content: center;
+  }
+  .card {
+    max-width: 420px;
+    width: 100%;
+    background: #ffffff;
+    border-radius: 16px;
+    padding: 24px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    border: 1px solid #eee;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 4px;
+  }
+  .header .icon { font-size: 28px; }
+  .header h2 { margin: 0; font-size: 20px; color: #2c3e50; }
+  .subtitle {
+    color: #7f8c8d;
+    font-size: 14px;
+    margin-top: 4px;
+    margin-bottom: 18px;
+    line-height: 1.4;
+  }
+
+  #cameraInput, #galleryInput {
+    display: block;
+    width: 100%;
+    font-size: 14px;
+    padding: 8px 0;
+  }
+
+  #preview {
+    max-width: 100%; max-height: 220px; border-radius: 10px;
+    display: none; object-fit: contain; margin: 14px auto 14px;
+    width: 100%; background: #f4f5f7;
+  }
+
+  #analyzeBtn {
+    width: 100%;
+    background: #3b6ba5;
+    color: #fff;
+    border: none;
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  #analyzeBtn:disabled { background: #b9c5d3; cursor: not-allowed; }
+  #analyzeBtn:active:enabled { opacity: 0.85; }
+
+  #aiResult { margin-top: 16px; }
+  .loading {
+    text-align: center; padding: 16px; color: #7f8c8d; font-size: 14px;
+  }
+  .result-box {
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .status { font-weight: 700; font-size: 15px; letter-spacing: 0.3px; }
+  .message { font-size: 13px; color: #4a5560; margin: 10px 0 4px; }
+  .ingredients { font-size: 11px; color: #95a0aa; margin-top: 8px; line-height: 1.4; }
+  .ai-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #3b6ba5;
+    background: #e6edf7;
+    border-radius: 6px;
+    padding: 2px 6px;
+    margin-bottom: 6px;
+  }
+
+  .footnote {
+    margin-top: 16px; font-size: 12px; color: #aab2bb; line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="icon">🥛🚫</div>
+      <h2>Verificador de Lactose</h2>
+    </div>
+    <p class="subtitle">Escolha uma foto da lista de ingredientes do produto (câmera ou galeria)</p>
+
+    <p class="subtitle" style="margin-bottom:6px;">📷 Tirar foto agora:</p>
+    <input id="cameraInput" type="file" accept="image/*" capture="environment" />
+
+    <p class="subtitle" style="margin-top:14px; margin-bottom:6px;">🖼️ Ou escolher da galeria:</p>
+    <input id="galleryInput" type="file" accept="image/*" />
+
+    <img id="preview" />
+
+    <button id="analyzeBtn" disabled>Analisar foto com IA</button>
+
+    <div id="aiResult"></div>
+
+    <p class="footnote">
+      A foto é enviada para um modelo de IA com visão (Groq, via n8n) que lê os
+      ingredientes e identifica a presença de leite/lactose.
+    </p>
+  </div>
+
+<script>
+const WEBHOOK_URL = 'https://silvaxxamericoxxlucas.app.n8n.cloud/webhook/verificador-lactose';
+
+const cameraInput = document.getElementById('cameraInput');
+const galleryInput = document.getElementById('galleryInput');
+const preview = document.getElementById('preview');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const aiResultDiv = document.getElementById('aiResult');
+
+let selectedFile = null;
+
+function handleFile(file) {
+  if (!file) {
+    aiResultDiv.innerHTML = '<div class="loading">Nenhum arquivo foi recebido pelo navegador.</div>';
+    return;
+  }
+  selectedFile = file;
+  aiResultDiv.innerHTML = `<div class="loading">Carregando ${file.name || 'imagem'} (${Math.round(file.size/1024)} KB)...</div>`;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    preview.src = e.target.result;
+    preview.style.display = 'block';
+    analyzeBtn.disabled = false;
+    aiResultDiv.innerHTML = '';
+  };
+  reader.onerror = () => {
+    aiResultDiv.innerHTML = '<div style="color:#c0392b; font-size:13px; padding:12px;">Erro ao ler o arquivo de imagem.</div>';
+  };
+  reader.readAsDataURL(file);
+}
+
+cameraInput.addEventListener('change', () => handleFile(cameraInput.files && cameraInput.files[0]));
+galleryInput.addEventListener('change', () => handleFile(galleryInput.files && galleryInput.files[0]));
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderAiStatus(status, color, bg, explicacao, ingredientes) {
+  aiResultDiv.innerHTML = `
+    <div class="result-box" style="background:${bg}; border:1px solid ${color}33;">
+      <span class="ai-badge">ANÁLISE POR IA</span><br/>
+      <div class="status" style="color:${color}">${status}</div>
+      <p class="message">${explicacao}</p>
+      ${ingredientes ? `<p class="ingredients"><strong>Ingredientes lidos:</strong> ${ingredientes}</p>` : ''}
+    </div>
+  `;
+}
+
+analyzeBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+
+  analyzeBtn.disabled = true;
+  aiResultDiv.innerHTML = '<div class="loading">Analisando foto com IA...</div>';
+
+  try {
+    const base64Data = await fileToBase64(selectedFile);
+    const mediaType = selectedFile.type || 'image/jpeg';
+
+    const response = await fetch(WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        image_base64: base64Data,
+        media_type: mediaType
+      })
+    });
+
+    const parsed = await response.json();
+
+    const statusMap = {
+      'contem_lactose':   { label: 'CONTÉM LACTOSE',              color: '#c0392b', bg: '#fdecea' },
+      'sem_lactose':      { label: 'SEM LACTOSE (aparente)',      color: '#1e8449', bg: '#eafaf1' },
+      'tracos_lactose':   { label: 'ATENÇÃO: TRAÇOS DE LACTOSE',  color: '#d68910', bg: '#fef5e7' },
+      'nao_identificado': { label: 'NÃO FOI POSSÍVEL IDENTIFICAR', color: '#707b7c', bg: '#f4f5f7' }
+    };
+    const s = statusMap[parsed.status] || statusMap['nao_identificado'];
+    renderAiStatus(s.label, s.color, s.bg, parsed.explicacao || '', parsed.ingredientes_detectados || '');
+  } catch (e) {
+    aiResultDiv.innerHTML = `<div style="color:#c0392b; font-size:13px; padding:12px;">Erro na análise por IA: ${e.message}</div>`;
+  } finally {
+    analyzeBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
